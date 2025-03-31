@@ -10,29 +10,32 @@ class AutoClickerApp:
         self.root.title("Auto Clicker Pro")
         
         # Click settings
+        self.is_setting_hotkey = False
         self.click_count = tk.IntVar(value=0)
-        self.infinite_clicks = tk.BooleanVar(value=False)
-        self.delay = tk.DoubleVar(value=100)
+        self.infinite_clicks = tk.BooleanVar(value=True)
+        self.delay = tk.DoubleVar(value=0)
         self.time_unit = tk.StringVar(value="ms")
         self.mouse_button = tk.StringVar(value="left")
         self.hotkey = tk.StringVar(value="F6")
         self.hotkey_type = None  # 'keyboard' or 'mouse'
         self.hotkey_code = None
         self.mode = tk.StringVar(value="toggle")
+        self.previous_mode = "toggle"
         self.is_clicking = False
         self.is_pressed = False
         self.click_thread = None
         self.listener = None
+        self.mouse_temp_listener = None
         self.mouse_map = {
             "left": mouse.Button.left,
             "right": mouse.Button.right,
             "middle": mouse.Button.middle,
             "button4": mouse.Button.x1,
             "button5": mouse.Button.x2,
-            "button6": mouse.Button.x1,  # Fallback to x1 if higher buttons not available
+            "button6": mouse.Button.x1,
             "button7": mouse.Button.x2,
             "button8": mouse.Button.middle
-        }         
+        }
 
         # GUI Setup
         self.create_widgets()
@@ -49,7 +52,7 @@ class AutoClickerApp:
         ttk.Entry(self.root, textvariable=self.delay).grid(row=1, column=1, padx=5, pady=5)
         ttk.Combobox(self.root, textvariable=self.time_unit, values=["ms", "seconds", "minutes", "hours"]).grid(row=1, column=2, padx=5, pady=5)
 
-        # Add mouse button options
+        # Mouse button options
         ttk.Label(self.root, text="Mouse Button:").grid(row=2, column=0, padx=5, pady=5)
         ttk.Combobox(self.root, textvariable=self.mouse_button, 
                     values=["left", "right", "middle", "button4", "button5", 
@@ -59,6 +62,8 @@ class AutoClickerApp:
         ttk.Label(self.root, text="Activation Mode:").grid(row=3, column=0, padx=5, pady=5)
         ttk.Radiobutton(self.root, text="Toggle", variable=self.mode, value="toggle").grid(row=3, column=1, padx=5, pady=5)
         ttk.Radiobutton(self.root, text="Hold", variable=self.mode, value="hold").grid(row=3, column=2, padx=5, pady=5)
+        ttk.Radiobutton(self.root, text="Select", variable=self.mode, value="select", 
+                        command=self.enter_select_mode).grid(row=3, column=3, padx=5, pady=5)
 
         # Hotkey setup
         ttk.Label(self.root, text="Hotkey:").grid(row=4, column=0, padx=5, pady=5)
@@ -68,43 +73,82 @@ class AutoClickerApp:
         # Start/Stop
         ttk.Button(self.root, text="Start", command=self.toggle_clicker).grid(row=5, column=1, padx=5, pady=5)
 
+        # Status label
+        self.status_label = ttk.Label(self.root, text="", foreground="blue")
+        self.status_label.grid(row=6, column=0, columnspan=4, padx=5, pady=5)
+
     def setup_listeners(self):
         self.keyboard_listener = keyboard.Listener(
             on_press=self.on_key_press,
             on_release=self.on_key_release
-        ) 
+        )
         self.mouse_listener = mouse.Listener(
-            on_click=self.on_mouse_click  # Removed on_release parameter
+            on_click=self.on_mouse_click
         )
         self.keyboard_listener.start()
         self.mouse_listener.start()
 
+    def enter_select_mode(self):
+        if self.mode.get() == "select":
+            self.previous_mode = "toggle" if self.is_clicking else self.mode.get()
+            self.status_label.config(text="Press any key/mouse button to set new hotkey")
+
     def start_hotkey_listener(self):
-        self.hotkey.set("Press any key or mouse button...")
-        self.listener = keyboard.Listener(on_press=self.set_hotkey)
-        self.mouse_temp_listener = mouse.Listener(on_click=self.set_mouse_hotkey)
-        self.listener.start()
-        self.mouse_temp_listener.start()
+        if not self.is_setting_hotkey:
+            self.is_setting_hotkey = True
+            self.hotkey.set("Press any key or mouse button...")
+            # Stop existing listeners
+            if self.listener:
+                self.listener.stop()
+            if self.mouse_temp_listener:
+                self.mouse_temp_listener.stop()
+                
+            self.listener = keyboard.Listener(on_press=self.set_hotkey)
+            self.mouse_temp_listener = mouse.Listener(on_click=self.set_mouse_hotkey)
+            self.listener.start()
+            self.mouse_temp_listener.start()
 
     def set_hotkey(self, key):
+       def set_hotkey(self, key):
         try:
             self.hotkey_type = "keyboard"
             self.hotkey_code = key.vk
             self.hotkey.set(str(key).replace("'", ""))
-            self.listener.stop()
-            self.mouse_temp_listener.stop()
         except AttributeError:
             pass
+        finally:
+            self.cleanup_hotkey_listeners()
 
     def set_mouse_hotkey(self, x, y, button, pressed):
-        if pressed:
-            self.hotkey_type = "mouse"
-            self.hotkey_code = button
-            self.hotkey.set(str(button).split(".")[-1])
+        if pressed and self.is_setting_hotkey:
+            widget = self.root.winfo_containing(x, y)
+            if not widget:  # Only handle non-GUI clicks
+                self.hotkey_type = "mouse"
+                self.hotkey_code = button
+                self.hotkey.set(str(button).split(".")[-1])
+                self.cleanup_hotkey_listeners()
+    
+    def cleanup_hotkey_listeners(self):
+        self.is_setting_hotkey = False
+        if self.listener:
             self.listener.stop()
+        if self.mouse_temp_listener:
             self.mouse_temp_listener.stop()
+        self.mode.set(self.previous_mode)
+        self.status_label.config(text="")
 
     def on_key_press(self, key):
+        if self.mode.get() == "select":
+            try:
+                self.hotkey_type = "keyboard"
+                self.hotkey_code = key.vk
+                self.hotkey.set(str(key).replace("'", ""))
+                self.mode.set(self.previous_mode)
+                self.status_label.config(text="")
+                return
+            except AttributeError:
+                pass
+        
         if self.mode.get() == "hold" and self.is_active_hotkey(key, "keyboard"):
             self.is_pressed = True
             self.start_clicker()
@@ -115,7 +159,18 @@ class AutoClickerApp:
             self.stop_clicker()
 
     def on_mouse_click(self, x, y, button, pressed):
-        # Consolidated press/release handling
+        # Ignore clicks on GUI elements during hotkey setting
+        if self.is_setting_hotkey and self.root.winfo_containing(x, y):
+            return
+        
+        if self.mode.get() == "select" and pressed:
+            self.hotkey_type = "mouse"
+            self.hotkey_code = button
+            self.hotkey.set(str(button).split(".")[-1])
+            self.mode.set(self.previous_mode)
+            self.status_label.config(text="")
+            return
+        
         if self.mode.get() == "hold" and self.is_active_hotkey(button, "mouse"):
             self.is_pressed = pressed
             if pressed:
@@ -124,6 +179,7 @@ class AutoClickerApp:
                 self.stop_clicker()
         elif self.mode.get() == "toggle" and pressed and self.is_active_hotkey(button, "mouse"):
             self.toggle_clicker()
+
     def is_active_hotkey(self, input, input_type):
         if input_type == self.hotkey_type:
             if input_type == "keyboard":
